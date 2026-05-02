@@ -28,7 +28,7 @@ const loadPrompt = () => {
 };
 
 // 1. Webhook para capturar Leads do Typebot
-app.post('/webhook/lead', (req, res) => {
+app.post('/webhook/lead', async (req, res) => {
     const { nome, empresa, whatsapp, servico_interesse, principal_problema, urgencia } = req.body;
     
     console.log("=========================================");
@@ -42,7 +42,44 @@ app.post('/webhook/lead', (req, res) => {
     console.log(`Urgência: ${urgencia || 'Não informada'}`);
     console.log("=========================================");
 
-    // TODO: Aqui você pode salvar no banco de dados, enviar email, ou mandar para o Chatwoot/CRM
+    // Formatando o número do WhatsApp (Removendo espaços, traços e parênteses)
+    let numeroLimpo = whatsapp ? whatsapp.replace(/\D/g, '') : '';
+    // Adicionando 55 se não tiver
+    if (numeroLimpo && !numeroLimpo.startsWith('55')) {
+        numeroLimpo = '55' + numeroLimpo;
+    }
+
+    if (numeroLimpo) {
+        try {
+            const sessionId = process.env.WHATSAPP_SESSION_ID || "SOMO_BOT"; // Pode mudar o nome da sessão no .env
+            const apiUrl = `https://crm.somo.tec.br/whatsapp-gateway/api/whatsapp/sessions/${sessionId}/messages/text`;
+            
+            const mensagem = `Olá, ${nome || 'pessoal'}! Aqui é o assistente da SOMO. Recebi seus dados sobre o projeto para "${empresa || 'sua empresa'}" e um especialista já vai falar com você!`;
+
+            console.log(`Enviando WhatsApp para ${numeroLimpo}...`);
+            
+            const wpRes = await fetch(apiUrl, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    to: numeroLimpo,
+                    text: mensagem
+                })
+            });
+
+            if (wpRes.ok) {
+                console.log("✅ Mensagem de WhatsApp enviada com sucesso!");
+            } else {
+                console.error("❌ Falha ao enviar WhatsApp:", await wpRes.text());
+            }
+        } catch (error) {
+            console.error("❌ Erro na integração com WhatsApp:", error);
+        }
+    } else {
+        console.log("⚠️ Nenhum número válido recebido para disparar mensagem.");
+    }
     
     return res.status(200).json({ 
         success: true, 
