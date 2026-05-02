@@ -3,7 +3,7 @@ const cors = require('cors');
 const dotenv = require('dotenv');
 const fs = require('fs');
 const path = require('path');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { OpenAI } = require('openai');
 
 // Configurações iniciais
 dotenv.config();
@@ -50,7 +50,7 @@ app.post('/webhook/lead', (req, res) => {
     });
 });
 
-// 2. Webhook para Chat com IA (Gemini)
+// 2. Webhook para Chat com IA (OpenAI / ChatGPT)
 app.post('/webhook/chat', async (req, res) => {
     const { message, history } = req.body;
     
@@ -58,9 +58,9 @@ app.post('/webhook/chat', async (req, res) => {
         return res.status(400).json({ error: "Mensagem é obrigatória." });
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
-        console.error("GEMINI_API_KEY não configurada no arquivo .env");
+        console.error("OPENAI_API_KEY não configurada no arquivo .env ou no Render");
         return res.status(500).json({ 
             error: "Configuração ausente.",
             reply: "Desculpe, estou passando por problemas técnicos temporários. Por favor, tente novamente mais tarde." 
@@ -68,36 +68,40 @@ app.post('/webhook/chat', async (req, res) => {
     }
 
     try {
-        const genAI = new GoogleGenerativeAI(apiKey);
+        const openai = new OpenAI({ apiKey: apiKey });
         const promptBase = loadPrompt();
         
-        // Configurando o modelo com as instruções do sistema
-        const model = genAI.getGenerativeModel({ 
-            model: 'gemini-1.5-flash',
-            systemInstruction: promptBase
-        });
+        // Montando o histórico de mensagens para a OpenAI
+        let messages = [
+            { role: "system", content: promptBase }
+        ];
 
-        // Montando o histórico simples para o Gemini se houver
-        let chatHistory = [];
+        // Se houver histórico anterior vindo do Typebot, adiciona
         if (history && Array.isArray(history)) {
-            chatHistory = history.map(h => ({
-                role: h.role === 'user' ? 'user' : 'model',
-                parts: [{ text: h.text }]
-            }));
+            history.forEach(h => {
+                messages.push({
+                    role: h.role === 'user' ? 'user' : 'assistant',
+                    content: h.text
+                });
+            });
         }
 
-        const chat = model.startChat({
-            history: chatHistory,
+        // Adiciona a mensagem atual do usuário
+        messages.push({ role: "user", content: message });
+
+        const completion = await openai.chat.completions.create({
+            model: "gpt-3.5-turbo", // Você pode mudar para gpt-4o ou gpt-4 se quiser
+            messages: messages,
+            temperature: 0.7,
         });
 
-        const result = await chat.sendMessage(message);
-        const responseText = await result.response.text();
+        const responseText = completion.choices[0].message.content;
 
         return res.status(200).json({
             reply: responseText
         });
     } catch (error) {
-        console.error("Erro na integração com o Gemini:", error);
+        console.error("Erro na integração com a OpenAI:", error);
         return res.status(500).json({
             reply: "Houve um erro ao processar sua resposta. Posso encaminhar sua dúvida para um especialista?"
         });
@@ -108,5 +112,5 @@ app.post('/webhook/chat', async (req, res) => {
 app.listen(PORT, () => {
     console.log(`\n🤖 Servidor do Chatbot SOMO rodando na porta ${PORT}`);
     console.log(`🔌 Webhook de Leads: http://localhost:${PORT}/webhook/lead`);
-    console.log(`🧠 Webhook de Chat IA: http://localhost:${PORT}/webhook/chat`);
+    console.log(`🧠 Webhook de Chat IA (OpenAI): http://localhost:${PORT}/webhook/chat`);
 });
