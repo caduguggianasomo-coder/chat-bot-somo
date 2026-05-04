@@ -30,7 +30,7 @@ const loadPrompt = () => {
 // 1. Webhook para capturar Leads do Typebot
 app.post('/webhook/lead', async (req, res) => {
     const { nome, empresa, whatsapp, servico_interesse, principal_problema, urgencia } = req.body;
-    
+
     console.log("=========================================");
     console.log(" NOVO LEAD RECEBIDO DO TYPEBOT");
     console.log("=========================================");
@@ -53,11 +53,11 @@ app.post('/webhook/lead', async (req, res) => {
         try {
             const sessionId = process.env.WHATSAPP_SESSION_ID || "SOMO_BOT"; // Pode mudar o nome da sessão no .env
             const apiUrl = `https://crm.somo.tec.br/whatsapp-gateway/api/whatsapp/sessions/${sessionId}/messages/text`;
-            
+
             const mensagem = `Olá, ${nome || 'pessoal'}! Aqui é o assistente da SOMO. Recebi seus dados sobre o projeto para "${empresa || 'sua empresa'}" e um especialista já vai falar com você!`;
 
             console.log(`Enviando WhatsApp para ${numeroLimpo}...`);
-            
+
             const wpRes = await fetch(apiUrl, {
                 method: "POST",
                 headers: {
@@ -80,17 +80,17 @@ app.post('/webhook/lead', async (req, res) => {
     } else {
         console.log("⚠️ Nenhum número válido recebido para disparar mensagem.");
     }
-    
-    return res.status(200).json({ 
-        success: true, 
-        message: "Lead recebido com sucesso!" 
+
+    return res.status(200).json({
+        success: true,
+        message: "Lead recebido com sucesso!"
     });
 });
 
 // 2. Webhook para Chat com IA (OpenAI / ChatGPT)
 app.post('/webhook/chat', async (req, res) => {
     const { message, history } = req.body;
-    
+
     if (!message) {
         return res.status(400).json({ error: "Mensagem é obrigatória." });
     }
@@ -98,16 +98,16 @@ app.post('/webhook/chat', async (req, res) => {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
         console.error("OPENAI_API_KEY não configurada no arquivo .env ou no Render");
-        return res.status(500).json({ 
+        return res.status(500).json({
             error: "Configuração ausente.",
-            reply: "Desculpe, estou passando por problemas técnicos temporários. Por favor, tente novamente mais tarde." 
+            reply: "Desculpe, estou passando por problemas técnicos temporários. Por favor, tente novamente mais tarde."
         });
     }
 
     try {
         const openai = new OpenAI({ apiKey: apiKey });
         const promptBase = loadPrompt();
-        
+
         // Montando o histórico de mensagens para a OpenAI
         let messages = [
             { role: "system", content: promptBase }
@@ -145,9 +145,79 @@ app.post('/webhook/chat', async (req, res) => {
     }
 });
 
+// Função para enviar mensagem de volta para o WhatsApp
+async function enviarMensagemWhatsApp(to, text) {
+    const sessionId = process.env.WHATSAPP_SESSION_ID || "SOMO_BOT_NOVO";
+    // O Node e a API do WhatsApp estão no mesmo servidor, então usamos localhost:3000
+    const apiUrl = `http://localhost:3000/api/whatsapp/sessions/${sessionId}/messages/text`;
+    
+    try {
+        await fetch(apiUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ to: to, text: text })
+        });
+        console.log(`💬 Resposta enviada para ${to}`);
+    } catch (error) {
+        console.error("❌ Erro ao enviar resposta pro WhatsApp:", error);
+    }
+}
+
+// 3. Webhook para receber mensagens DIRETAMENTE do WhatsApp
+app.post('/webhook/whatsapp', async (req, res) => {
+    // Retornamos 200 rápido para a API não dar timeout
+    res.status(200).send("OK");
+
+    try {
+        const payload = req.body;
+        
+        // Verifica se é um evento de recebimento de mensagem
+        if (payload && payload.event === "message.received" && payload.data) {
+            const remetente = payload.data.from; // ex: 5511999999999
+            const textoRecebido = payload.data.message;
+
+            // Evitar responder a mensagens vazias ou mensagens do próprio bot
+            if (!textoRecebido || !remetente) return;
+
+            console.log(`\n=========================================`);
+            console.log(` WHATSAPP - NOVA MENSAGEM RECEBIDA`);
+            console.log(` De: ${remetente}`);
+            console.log(` Msg: ${textoRecebido}`);
+            console.log(`=========================================`);
+
+            const apiKey = process.env.OPENAI_API_KEY;
+            if (!apiKey) {
+                console.error("Falta API Key da OpenAI!");
+                return;
+            }
+
+            const openai = new OpenAI({ apiKey: apiKey });
+            const promptBase = loadPrompt();
+
+            // Pede para a OpenAI gerar a resposta
+            const response = await openai.chat.completions.create({
+                model: "gpt-3.5-turbo",
+                messages: [
+                    { role: "system", content: promptBase },
+                    { role: "user", content: textoRecebido }
+                ],
+                temperature: 0.7,
+            });
+
+            const respostaIA = response.choices[0].message.content;
+            
+            // Dispara a resposta gerada de volta pro cliente no WhatsApp
+            await enviarMensagemWhatsApp(remetente, respostaIA);
+        }
+    } catch (error) {
+        console.error("Erro no processamento do WhatsApp:", error);
+    }
+});
+
 // Inicialização do servidor
 app.listen(PORT, () => {
     console.log(`\n🤖 Servidor do Chatbot SOMO rodando na porta ${PORT}`);
     console.log(`🔌 Webhook de Leads: http://localhost:${PORT}/webhook/lead`);
     console.log(`🧠 Webhook de Chat IA (OpenAI): http://localhost:${PORT}/webhook/chat`);
+    console.log(`📱 Webhook de WhatsApp: http://localhost:${PORT}/webhook/whatsapp`);
 });
